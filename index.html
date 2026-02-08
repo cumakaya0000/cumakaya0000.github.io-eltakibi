@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Hand Drag Game</title>
+<title>Hand Game</title>
 
 <style>
 body{
@@ -27,7 +27,7 @@ video{
   width:110px;
   height:110px;
   background:#4ade80;
-  border-radius:16px;
+  border-radius:20px;
   left:150px;
   top:150px;
   display:flex;
@@ -36,7 +36,6 @@ video{
   font-weight:bold;
   user-select:none;
   touch-action:none;
-  color:#000;
 }
 
 #info{
@@ -47,12 +46,13 @@ video{
   font-size:14px;
 }
 
-#score{
+#hud{
   position:fixed;
   right:10px;
   top:10px;
   color:white;
-  font-size:18px;
+  font-size:16px;
+  text-align:right;
 }
 
 .target{
@@ -67,20 +67,25 @@ video{
   position:absolute;
   color:white;
   font-weight:bold;
-  animation: pop 0.8s ease-out forwards;
   pointer-events:none;
+  animation: pop .8s ease-out forwards;
 }
 
 @keyframes pop{
-  from{transform:translateY(0);opacity:1;}
-  to{transform:translateY(-30px);opacity:0;}
+  from{opacity:1;transform:translateY(0);}
+  to{opacity:0;transform:translateY(-30px);}
 }
 </style>
 </head>
 <body>
 
 <div id="info">Hazır</div>
-<div id="score">Puan: 0</div>
+<div id="hud">
+  Puan: <span id="score">0</span><br>
+  Combo: <span id="combo">0</span><br>
+  Süre: <span id="time">120</span>
+</div>
+
 <div id="box">TUT</div>
 <video id="video" autoplay playsinline muted></video>
 
@@ -93,21 +98,33 @@ const { HandLandmarker, FilesetResolver } = vision;
 const video = document.getElementById("video");
 const box   = document.getElementById("box");
 const info  = document.getElementById("info");
-const scoreDiv = document.getElementById("score");
+
+const scoreEl = document.getElementById("score");
+const comboEl = document.getElementById("combo");
+const timeEl  = document.getElementById("time");
 
 let handLandmarker;
 
 let grabbing = false;
 let lastFinger = null;
 
+// ----------------- OYUN -----------------
+
 let score = 0;
+
+let combo = 0;
+let lastHitTime = 0;
+
 let gameOver = false;
+
+const GAME_TIME = 120000;
+let startTime = performance.now();
 
 const targets = [];
 
 // ---------------- CAMERA ----------------
-async function setupCamera(){
 
+async function setupCamera(){
   const stream = await navigator.mediaDevices.getUserMedia({
     video:{
       facingMode:{ ideal:"environment" },
@@ -116,13 +133,12 @@ async function setupCamera(){
     },
     audio:false
   });
-
   video.srcObject = stream;
-
   return new Promise(r => video.onloadedmetadata = r);
 }
 
 // ---------------- MEDIAPIPE ----------------
+
 async function createLandmarker(){
 
   const fileset = await FilesetResolver.forVisionTasks(
@@ -145,36 +161,66 @@ function distance(a,b){
   return Math.sqrt(dx*dx+dy*dy);
 }
 
-// ---------------- TARGET SYSTEM ----------------
+// ---------------- TARGET ----------------
 
 function spawnTarget(){
 
   if(gameOver) return;
 
-  const t = document.createElement("div");
-  t.className = "target";
+  const el = document.createElement("div");
+  el.className = "target";
 
   const good = Math.random() < 0.5;
 
-  t.dataset.type = good ? "good" : "bad";
-  t.style.background = good ? "#f472b6" : "#ef4444";
+  el.dataset.type = good ? "good" : "bad";
+  el.style.background = good ? "#f472b6" : "#ef4444";
 
-  t.style.left = Math.random() * (window.innerWidth-80) + "px";
-  t.style.top  = Math.random() * (window.innerHeight-80) + "px";
+  const obj = {
+    el,
+    x: Math.random() * (innerWidth-80),
+    y: Math.random() * (innerHeight-80),
+    vx: (Math.random()*0.6+0.2) * (Math.random()<0.5?-1:1),
+    vy: (Math.random()*0.6+0.2) * (Math.random()<0.5?-1:1)
+  };
 
-  document.body.appendChild(t);
-  targets.push(t);
+  el.style.left = obj.x+"px";
+  el.style.top  = obj.y+"px";
+
+  document.body.appendChild(el);
+  targets.push(obj);
 
   setTimeout(()=>{
-    if(t.parentNode){
-      t.remove();
-      const i = targets.indexOf(t);
-      if(i>-1) targets.splice(i,1);
-    }
-  },4000);
+    removeTarget(obj);
+  },8000);
 }
 
+function removeTarget(t){
+  const i = targets.indexOf(t);
+  if(i>-1){
+    t.el.remove();
+    targets.splice(i,1);
+  }
+}
+
+function updateTargets(){
+
+  for(const t of targets){
+
+    t.x += t.vx;
+    t.y += t.vy;
+
+    if(t.x<0 || t.x>innerWidth-70) t.vx*=-1;
+    if(t.y<0 || t.y>innerHeight-70) t.vy*=-1;
+
+    t.el.style.left = t.x+"px";
+    t.el.style.top  = t.y+"px";
+  }
+}
+
+// ---------------- HIT ----------------
+
 function isHit(a,b){
+
   const r1 = a.getBoundingClientRect();
   const r2 = b.getBoundingClientRect();
 
@@ -193,45 +239,66 @@ function showFloat(x,y,text){
   f.style.left = x+"px";
   f.style.top  = y+"px";
   document.body.appendChild(f);
-
   setTimeout(()=>f.remove(),800);
-}
-
-function finishGame(){
-  gameOver = true;
-  info.textContent = "Oyun bitti!";
 }
 
 function checkTargets(){
 
-  if(gameOver) return;
+  const now = performance.now();
 
   for(let i=targets.length-1;i>=0;i--){
 
     const t = targets[i];
 
-    if(isHit(box,t)){
+    if(isHit(box,t.el)){
 
-      const rect = t.getBoundingClientRect();
-
-      if(t.dataset.type==="good"){
-        score += 10;
-        showFloat(rect.left,rect.top,"+10");
+      // combo penceresi
+      if(now - lastHitTime < 1200){
+        combo++;
       }else{
-        score -= 10;
-        showFloat(rect.left,rect.top,"-10");
+        combo = 1;
       }
 
-      scoreDiv.textContent = "Puan: " + score;
+      lastHitTime = now;
 
-      t.remove();
-      targets.splice(i,1);
+      const multiplier = 1 + (combo-1)*0.5;
+      const base = t.el.dataset.type==="good" ? 10 : -10;
 
-      if(score >= 50){
-        finishGame();
-      }
+      const gained = Math.round(base * multiplier);
+
+      score += gained;
+
+      const r = t.el.getBoundingClientRect();
+      showFloat(r.left,r.top,(gained>0?"+":"")+gained);
+
+      comboEl.textContent = combo;
+      scoreEl.textContent = score;
+
+      removeTarget(t);
     }
   }
+}
+
+// ---------------- TIMER ----------------
+
+function updateTimer(){
+
+  const left = Math.max(0, GAME_TIME - (performance.now()-startTime));
+  const sec = Math.ceil(left/1000);
+
+  timeEl.textContent = sec;
+
+  if(left<=0){
+    finishGame();
+  }
+}
+
+// ---------------- GAME OVER ----------------
+
+function finishGame(){
+  if(gameOver) return;
+  gameOver = true;
+  info.textContent = "Süre bitti!";
 }
 
 // ---------------- LOOP ----------------
@@ -240,65 +307,64 @@ let lastTime = -1;
 
 async function loop(){
 
-  if(video.readyState >= 2 && !gameOver){
+  if(!gameOver){
 
-    const now = performance.now();
+    updateTimer();
+    updateTargets();
 
-    if(lastTime !== video.currentTime){
+    if(video.readyState >= 2){
 
-      lastTime = video.currentTime;
+      const now = performance.now();
 
-      const res = handLandmarker.detectForVideo(video, now);
+      if(lastTime !== video.currentTime){
 
-      if(res.landmarks && res.landmarks.length){
+        lastTime = video.currentTime;
 
-        const lm = res.landmarks[0];
+        const res = handLandmarker.detectForVideo(video, now);
 
-        const indexTip = lm[8];
-        const thumbTip = lm[4];
+        if(res.landmarks && res.landmarks.length){
 
-        const pinch = distance(indexTip,thumbTip) < 0.05;
+          const lm = res.landmarks[0];
 
-        grabbing = pinch;
+          const indexTip = lm[8];
+          const thumbTip = lm[4];
 
-        box.style.background = grabbing ? "#facc15" : "#60a5fa";
+          grabbing = distance(indexTip,thumbTip) < 0.05;
 
-        if(grabbing){
+          box.style.background = grabbing ? "#facc15" : "#60a5fa";
 
-          const x = indexTip.x * window.innerWidth;
-          const y = indexTip.y * window.innerHeight;
+          if(grabbing){
 
-          if(lastFinger){
+            const x = indexTip.x * innerWidth;
+            const y = indexTip.y * innerHeight;
 
-            const dx = x - lastFinger.x;
-            const dy = y - lastFinger.y;
+            if(lastFinger){
 
-            const rect = box.getBoundingClientRect();
+              const dx = x-lastFinger.x;
+              const dy = y-lastFinger.y;
 
-            let newX = rect.left + dx;
-            let newY = rect.top  + dy;
+              const r = box.getBoundingClientRect();
 
-            box.style.left = newX + "px";
-            box.style.top  = newY + "px";
+              box.style.left = (r.left + dx*0.9)+"px";
+              box.style.top  = (r.top  + dy*0.9)+"px";
 
-            checkTargets();
+              checkTargets();
+            }
+
+            lastFinger = {x,y};
+            info.textContent="Sürükleniyor";
+
+          }else{
+            lastFinger=null;
+            info.textContent="El var";
           }
 
-          lastFinger = { x, y };
-
-          info.textContent = "Sürükleniyor";
-
         }else{
-          lastFinger = null;
-          info.textContent = "El var";
+          lastFinger=null;
+          info.textContent="El yok";
+          box.style.background="#4ade80";
         }
-
-      }else{
-        lastFinger = null;
-        info.textContent = "El yok";
-        box.style.background = "#4ade80";
       }
-
     }
   }
 
@@ -308,7 +374,7 @@ async function loop(){
 await setupCamera();
 await createLandmarker();
 
-setInterval(spawnTarget,1200);
+setInterval(spawnTarget,1100);
 
 loop();
 
