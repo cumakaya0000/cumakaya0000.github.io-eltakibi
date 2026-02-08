@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Hand Drag - Delta Move</title>
+<title>Hand Drag Game</title>
 
 <style>
 body{
@@ -36,6 +36,7 @@ video{
   font-weight:bold;
   user-select:none;
   touch-action:none;
+  color:#000;
 }
 
 #info{
@@ -45,11 +46,41 @@ video{
   color:white;
   font-size:14px;
 }
+
+#score{
+  position:fixed;
+  right:10px;
+  top:10px;
+  color:white;
+  font-size:18px;
+}
+
+.target{
+  position:absolute;
+  width:70px;
+  height:70px;
+  border-radius:14px;
+  pointer-events:none;
+}
+
+.float{
+  position:absolute;
+  color:white;
+  font-weight:bold;
+  animation: pop 0.8s ease-out forwards;
+  pointer-events:none;
+}
+
+@keyframes pop{
+  from{transform:translateY(0);opacity:1;}
+  to{transform:translateY(-30px);opacity:0;}
+}
 </style>
 </head>
 <body>
 
 <div id="info">Hazır</div>
+<div id="score">Puan: 0</div>
 <div id="box">TUT</div>
 <video id="video" autoplay playsinline muted></video>
 
@@ -62,13 +93,17 @@ const { HandLandmarker, FilesetResolver } = vision;
 const video = document.getElementById("video");
 const box   = document.getElementById("box");
 const info  = document.getElementById("info");
+const scoreDiv = document.getElementById("score");
 
 let handLandmarker;
 
 let grabbing = false;
-
-// son parmak konumu
 let lastFinger = null;
+
+let score = 0;
+let gameOver = false;
+
+const targets = [];
 
 // ---------------- CAMERA ----------------
 async function setupCamera(){
@@ -110,12 +145,102 @@ function distance(a,b){
   return Math.sqrt(dx*dx+dy*dy);
 }
 
+// ---------------- TARGET SYSTEM ----------------
+
+function spawnTarget(){
+
+  if(gameOver) return;
+
+  const t = document.createElement("div");
+  t.className = "target";
+
+  const good = Math.random() < 0.5;
+
+  t.dataset.type = good ? "good" : "bad";
+  t.style.background = good ? "#f472b6" : "#ef4444";
+
+  t.style.left = Math.random() * (window.innerWidth-80) + "px";
+  t.style.top  = Math.random() * (window.innerHeight-80) + "px";
+
+  document.body.appendChild(t);
+  targets.push(t);
+
+  setTimeout(()=>{
+    if(t.parentNode){
+      t.remove();
+      const i = targets.indexOf(t);
+      if(i>-1) targets.splice(i,1);
+    }
+  },4000);
+}
+
+function isHit(a,b){
+  const r1 = a.getBoundingClientRect();
+  const r2 = b.getBoundingClientRect();
+
+  return !(
+    r1.right < r2.left ||
+    r1.left > r2.right ||
+    r1.bottom < r2.top ||
+    r1.top > r2.bottom
+  );
+}
+
+function showFloat(x,y,text){
+  const f = document.createElement("div");
+  f.className = "float";
+  f.textContent = text;
+  f.style.left = x+"px";
+  f.style.top  = y+"px";
+  document.body.appendChild(f);
+
+  setTimeout(()=>f.remove(),800);
+}
+
+function finishGame(){
+  gameOver = true;
+  info.textContent = "Oyun bitti!";
+}
+
+function checkTargets(){
+
+  if(gameOver) return;
+
+  for(let i=targets.length-1;i>=0;i--){
+
+    const t = targets[i];
+
+    if(isHit(box,t)){
+
+      const rect = t.getBoundingClientRect();
+
+      if(t.dataset.type==="good"){
+        score += 10;
+        showFloat(rect.left,rect.top,"+10");
+      }else{
+        score -= 10;
+        showFloat(rect.left,rect.top,"-10");
+      }
+
+      scoreDiv.textContent = "Puan: " + score;
+
+      t.remove();
+      targets.splice(i,1);
+
+      if(score >= 50){
+        finishGame();
+      }
+    }
+  }
+}
+
 // ---------------- LOOP ----------------
+
 let lastTime = -1;
 
 async function loop(){
 
-  if(video.readyState >= 2){
+  if(video.readyState >= 2 && !gameOver){
 
     const now = performance.now();
 
@@ -136,7 +261,6 @@ async function loop(){
 
         grabbing = pinch;
 
-        // renkler
         box.style.background = grabbing ? "#facc15" : "#60a5fa";
 
         if(grabbing){
@@ -156,6 +280,8 @@ async function loop(){
 
             box.style.left = newX + "px";
             box.style.top  = newY + "px";
+
+            checkTargets();
           }
 
           lastFinger = { x, y };
@@ -181,6 +307,9 @@ async function loop(){
 
 await setupCamera();
 await createLandmarker();
+
+setInterval(spawnTarget,1200);
+
 loop();
 
 </script>
